@@ -1,17 +1,16 @@
-# dashboard.py — FINAL VERSION (works with every TikTok stats CSV you've got)
+# dashboard.py — FINAL FIXED VERSION (no more syntax errors!)
 import streamlit as st
 import pandas as pd
 import os
 import glob
 from datetime import datetime
 
-# CHANGE THIS DATE APPEARS IN THE DASHBOARD — CHANGE IT WHEN YOU UPDATE THE DATA
+# CHANGE THIS DATE WHEN YOU UPDATE THE DATA
 DOWNLOAD_DATE = "2025-11-27"
 
 DATA_DIR = "./data"
 
 def safe_int(x):
-    """Safely convert to int, return 0 on empty/invalid values"""
     if not x or str(x).strip() in ("", ","):
         return 0
     try:
@@ -20,7 +19,6 @@ def safe_int(x):
         return 0
 
 def safe_float(x):
-    """Safely convert to float (removes % too)"""
     if not x or str(x).strip() in ("", ","):
         return 0.0
     try:
@@ -68,7 +66,6 @@ def parse_csv(filepath):
             if not line or line == ",":
                 continue
 
-            # ----- HEADER METRICS -----
             if not in_videos_section:
                 if line.startswith("Nickname,"):
                     data["nickname"] = line.split(",", 1)[1].strip()
@@ -87,22 +84,18 @@ def parse_csv(filepath):
                 elif line.startswith("Videos"):
                     in_videos_section = True
                     continue
-
-            # ----- COLLECT VIDEO LINES -----
             else:
                 if line.startswith("Date,Plays") or line.startswith("Mentions") or line.startswith("Hashtags"):
                     continue
                 if line.startswith("Date,"):
-                    video_lines.append(original_line)  # keep original for correct quoting
+                    video_lines.append(original_line)
 
-        # ----- PARSE VIDEOS (handles commas in descriptions & empty fields) -----
         videos = []
         for vline in video_lines:
             vline = vline.strip()
             if not vline:
                 continue
 
-            # Case 1: description is quoted at the end → find last ",
             if '",' in vline:
                 desc_start = vline.rfind('",')
                 if desc_start == -1:
@@ -110,7 +103,6 @@ def parse_csv(filepath):
                 description = vline[desc_start + 2 :].strip().strip('"')
                 numbers_part = vline[: desc_start]
             else:
-                # Case 2: no quotes → split normally (rare but happens)
                 parts = vline.split(",", 5)
                 if len(parts) < 6:
                     continue
@@ -148,11 +140,9 @@ st.set_page_config(page_title="BookTok Italia Leaderboard", layout="wide")
 st.title("BookTok Italia Leaderboard")
 st.caption(f"Data updated on: **{DOWNLOAD_DATE}**")
 
-# Create data folder if missing
 if not os.path.exists(DATA_DIR):
     os.makedirs(DATA_DIR)
 
-# Sidebar uploader
 uploaded = st.sidebar.file_uploader("Upload new *_tiktok_stats.csv files", accept_multiple_files=True, type="csv")
 if uploaded:
     for file in uploaded:
@@ -161,14 +151,12 @@ if uploaded:
     st.sidebar.success("Files uploaded — refreshing data...")
     st.rerun()
 
-# Load data
 profiles = load_all_data()
 
 if not profiles:
     st.warning("No valid CSV files found in the `./data` folder.")
     st.stop()
 
-# Build leaderboard
 leaderboard = pd.DataFrame([
     {
         "Username": p["username"],
@@ -203,7 +191,8 @@ with tab1:
     col1.metric("Total Accounts", len(sorted_board))
     col2.metric("Highest Avg Likes", f"{sorted_board['Avg Likes'].iloc[0]:,}")
     col3.metric("Median Avg Likes", f"{sorted_board['Avg Likes'].median():,.0f}")
-    col4.metric("Most Videos", f"{sorted_board.loc[sorted_board["Total Videos"].idxmax(), "Nickname"])
+    # Fixed line below — added missing closing brace
+    col4.metric("Most Videos", f"{sorted_board.loc[sorted_board['Total Videos'].idxmax(), 'Nickname']} ({sorted_board['Total Videos'].max():,} videos)")
 
 with tab2:
     selected_username = st.selectbox("Choose an account", options=leaderboard["Username"])
