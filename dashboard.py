@@ -1,16 +1,18 @@
-# dashboard.py — FINAL VERSION THAT WORKS WITH EVERY SINGLE ONE OF YOUR CSVS
+# dashboard.py — FINAL VERSION (works with every TikTok stats CSV you've got)
 import streamlit as st
 import pandas as pd
 import os
 import glob
 from datetime import datetime
 
-# UPDATE THIS WHEN YOU DOWNLOAD NEW DATA
+# CHANGE THIS DATE APPEARS IN THE DASHBOARD — CHANGE IT WHEN YOU UPDATE THE DATA
 DOWNLOAD_DATE = "2025-11-27"
+
 DATA_DIR = "./data"
 
 def safe_int(x):
-    if not x or str(x).strip() == "": 
+    """Safely convert to int, return 0 on empty/invalid values"""
+    if not x or str(x).strip() in ("", ","):
         return 0
     try:
         return int(str(x).replace(",", "").strip())
@@ -18,7 +20,8 @@ def safe_int(x):
         return 0
 
 def safe_float(x):
-    if not x or str(x).strip() == "": 
+    """Safely convert to float (removes % too)"""
+    if not x or str(x).strip() in ("", ","):
         return 0.0
     try:
         return float(str(x).replace("%", "").replace(",", "").strip())
@@ -29,163 +32,201 @@ def safe_float(x):
 def load_all_data():
     profiles = []
     csv_files = glob.glob(os.path.join(DATA_DIR, "*_tiktok_stats.csv"))
-    
+
     for filepath in csv_files:
         username = os.path.basename(filepath).replace("_tiktok_stats.csv", "")
-        data = parse_csv_safely(filepath)
-        if data:
-            data['username'] = username
-            data['download_date'] = DOWNLOAD_DATE
-            profiles.append(data)
+        profile = parse_csv(filepath)
+        if profile:
+            profile["username"] = username
+            profile["download_date"] = DOWNLOAD_DATE
+            profiles.append(profile)
     return profiles
 
-def parse_csv_safely(filepath):
+def parse_csv(filepath):
     try:
-        with open(filepath, 'r', encoding='utf-8') as f:
-            lines = [line.rstrip() for line in f.readlines()]
+        with open(filepath, "r", encoding="utf-8") as f:
+            lines = [line.rstrip("\n") for line in f]
 
-        result = {
-            'nickname': 'Unknown',
-            'follower_count': 0,
-            'avg_likes': 0,
-            'avg_comments': 0,
-            'avg_shares': 0,
-            'engagement_rate': 0.0,
-            'video_count': 0,
-            'videos': pd.DataFrame()
+        data = {
+            "nickname": "Unknown",
+            "follower_count": 0,
+            "avg_likes": 0,
+            "avg_comments": 0,
+            "avg_shares": 0,
+            "engagement_rate": 0.0,
+            "video_count": 0,
+            "videos": pd.DataFrame(),
         }
 
-        in_videos = False
+        in_videos_section = False
         video_lines = []
 
         for line in lines:
+            original_line = line
             line = line.strip()
+
             if not line or line == ",":
                 continue
 
-            # === METRICS (only read lines that actually contain a comma and a value) ===
-            if not in_videos:
-                if "Nickname," in line:
-                    result['nickname'] = line.split(",", 1)[1].strip()
-                elif "Follower Count," in line:
-                    result['follower_count'] = safe_int(line.split(",", 1)[1])
-                elif "Average Likes," in line:
-                    result['avg_likes'] = safe_int(line.split(",", 1)[1])
-                elif "Average Comments," in line:
-                    result['avg_comments'] = safe_int(line.split(",", 1)[1])
-                elif "Average Shares," in line:
-                    result['avg_shares'] = safe_int(line.split(",", 1)[1])
-                elif "Total Engagement Rate," in line:
-                    result['engagement_rate'] = safe_float(line.split(",", 1)[1])
-                elif "Video Count," in line:
-                    result['video_count'] = safe_int(line.split(",", 1)[1])
+            # ----- HEADER METRICS -----
+            if not in_videos_section:
+                if line.startswith("Nickname,"):
+                    data["nickname"] = line.split(",", 1)[1].strip()
+                elif line.startswith("Follower Count,"):
+                    data["follower_count"] = safe_int(line.split(",", 1)[1])
+                elif line.startswith("Average Likes,"):
+                    data["avg_likes"] = safe_int(line.split(",", 1)[1])
+                elif line.startswith("Average Comments,"):
+                    data["avg_comments"] = safe_int(line.split(",", 1)[1])
+                elif line.startswith("Average Shares,"):
+                    data["avg_shares"] = safe_int(line.split(",", 1)[1])
+                elif line.startswith("Total Engagement Rate,"):
+                    data["engagement_rate"] = safe_float(line.split(",", 1)[1])
+                elif line.startswith("Video Count,"):
+                    data["video_count"] = safe_int(line.split(",", 1)[1])
                 elif line.startswith("Videos"):
-                    in_videos = True
+                    in_videos_section = True
                     continue
 
-            # === COLLECT VIDEO LINES ===
+            # ----- COLLECT VIDEO LINES -----
             else:
                 if line.startswith("Date,Plays") or line.startswith("Mentions") or line.startswith("Hashtags"):
                     continue
                 if line.startswith("Date,"):
-                    video_lines.append(line)
+                    video_lines.append(original_line)  # keep original for correct quoting
 
-        # === PARSE VIDEOS (super robust) ===
+        # ----- PARSE VIDEOS (handles commas in descriptions & empty fields) -----
         videos = []
         for vline in video_lines:
+            vline = vline.strip()
+            if not vline:
+                continue
+
+            # Case 1: description is quoted at the end → find last ",
             if '",' in vline:
-                # Description is quoted at the end
                 desc_start = vline.rfind('",')
                 if desc_start == -1:
                     continue
-                desc = vline[desc_start+2:].strip('"')
-                numbers = vline[:desc_start]
+                description = vline[desc_start + 2 :].strip().strip('"')
+                numbers_part = vline[: desc_start]
             else:
-                # No quoted description → split normally
+                # Case 2: no quotes → split normally (rare but happens)
                 parts = vline.split(",", 5)
                 if len(parts) < 6:
                     continue
-                numbers = ",".join(parts[:5])
-                desc = parts[5].strip('"') if len(parts) > 5 else ""
+                numbers_part = ",".join(parts[:5])
+                description = parts[5].strip().strip('"')
 
-            fields = [f.strip() for f in numbers.split(",")]
+            fields = [f.strip() for f in numbers_part.split(",")]
             if len(fields) < 5:
                 continue
 
-            # Last 4 are always plays, likes, comments, shares
             plays = safe_int(fields[-4])
             likes = safe_int(fields[-3])
             comments = safe_int(fields[-2])
             shares = safe_int(fields[-1])
-
-            # Timestamp = everything before the numbers
             timestamp = ", ".join(fields[:-4])
 
             videos.append({
-                'date': timestamp,
-                'plays': plays,
-                'likes': likes,
-                'comments': comments,
-                'shares': shares,
-                'description': desc
+                "date": timestamp if timestamp else "Unknown",
+                "plays": plays,
+                "likes": likes,
+                "comments": comments,
+                "shares": shares,
+                "description": description,
             })
 
-        result['videos'] = pd.DataFrame(videos)
-        return result
+        data["videos"] = pd.DataFrame(videos)
+        return data
 
     except Exception as e:
         st.error(f"Error parsing {os.path.basename(filepath)}: {e}")
         return None
 
 # ===================== STREAMLIT APP =====================
-st.set_page_config(page_title="BookTok Leaderboard", layout="wide")
+st.set_page_config(page_title="BookTok Italia Leaderboard", layout="wide")
 st.title("BookTok Italia Leaderboard")
-st.caption(f"Data updated: **{DOWNLOAD_DATE}**")
+st.caption(f"Data updated on: **{DOWNLOAD_DATE}**")
 
+# Create data folder if missing
 if not os.path.exists(DATA_DIR):
     os.makedirs(DATA_DIR)
 
-uploaded = st.sidebar.file_uploader("Upload new CSVs", accept_multiple_files=True, type="csv")
+# Sidebar uploader
+uploaded = st.sidebar.file_uploader("Upload new *_tiktok_stats.csv files", accept_multiple_files=True, type="csv")
 if uploaded:
-    for f in uploaded:
-        with open(os.path.join(DATA_DIR, f.name), "wb") as out:
-            out.write(f.getbuffer())
-    st.sidebar.success("Uploaded! Refreshing...")
+    for file in uploaded:
+        with open(os.path.join(DATA_DIR, file.name), "wb") as f:
+            f.write(file.getbuffer())
+    st.sidebar.success("Files uploaded — refreshing data...")
     st.rerun()
 
+# Load data
 profiles = load_all_data()
 
 if not profiles:
-    st.warning("No valid CSV files found in ./data/")
+    st.warning("No valid CSV files found in the `./data` folder.")
     st.stop()
 
-# MAIN LEADERBOARD — only what you care about
-df = pd.DataFrame([{
-    'Username': p['username'],
-    'Nickname': p['nickname'],
-    'Followers': p['follower_count'],
-    'Avg Likes': p['avg_likes'],
-    'Avg Comments': p['avg_comments'],
-    'Avg Shares': p['avg_shares'],
-    'Engagement %': round(p['engagement_rate'], 2),
-    'Videos': p['video_count'] or len(p['videos']),
-    'Active': 'Yes' if len(p['videos']) > 0 else 'No'
-} for p in profiles])
+# Build leaderboard
+leaderboard = pd.DataFrame([
+    {
+        "Username": p["username"],
+        "Nickname": p["nickname"],
+        "Followers": p["follower_count"],
+        "Avg Likes": p["avg_likes"],
+        "Avg Comments": p["avg_comments"],
+        "Avg Shares": p["avg_shares"],
+        "Engagement %": round(p["engagement_rate"], 2),
+        "Total Videos": p["video_count"] or len(p["videos"]),
+    }
+    for p in profiles
+])
 
-tab1, tab2 = st.tabs(["Leaderboard", "Details"])
+tab1, tab2 = st.tabs(["Leaderboard", "Profile Details"])
 
 with tab1:
-    st.header("Top BookTok Accounts — Sorted by Average Likes")
-    board = df.sort_values("Avg Likes", ascending=False).reset_index(drop=True)
-    st.dataframe(board.style.format({
-        "Followers": "{:,}",
-        "Avg Likes": "{:,}",
-        "Avg Comments": "{:,}",
-        "Avg Shares": "{:,}"
-    }), use_container_width=True, hide_index=True)
+    st.header("Top Accounts — Sorted by Average Likes")
+    sorted_board = leaderboard.sort_values("Avg Likes", ascending=False).reset_index(drop=True)
+    st.dataframe(
+        sorted_board.style.format({
+            "Followers": "{:,}",
+            "Avg Likes": "{:,}",
+            "Avg Comments": "{:,}",
+            "Avg Shares": "{:,}",
+        }),
+        use_container_width=True,
+        hide_index=True,
+    )
 
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Total Accounts", len(board))
-    c2.metric("Top Avg Likes", f"{board['Avg Likes'].iloc[0]:,}")
-    c3.metric("Median Avg Likes", f"{board['Avg Likes'].median():,.0f}")
-    c4.metric("Most Active", board
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Total Accounts", len(sorted_board))
+    col2.metric("Highest Avg Likes", f"{sorted_board['Avg Likes'].iloc[0]:,}")
+    col3.metric("Median Avg Likes", f"{sorted_board['Avg Likes'].median():,.0f}")
+    col4.metric("Most Videos", f"{sorted_board.loc[sorted_board["Total Videos"].idxmax(), "Nickname"])
+
+with tab2:
+    selected_username = st.selectbox("Choose an account", options=leaderboard["Username"])
+    profile = next(p for p in profiles if p["username"] == selected_username)
+
+    col1, col2 = st.columns([1, 2])
+    with col1:
+        st.subheader(f"@{profile['username']}")
+        st.write(f"**{profile['nickname']}**")
+        st.write(f"**Followers:** {profile['follower_count']:,}")
+        st.write(f"**Total Videos:** {len(profile['videos'])}")
+        st.metric("Average Likes", f"{profile['avg_likes']:,}")
+        st.metric("Engagement Rate", f"{profile['engagement_rate']:.2f}%")
+
+    with col2:
+        if not profile["videos"].empty:
+            st.subheader("Latest Videos")
+            display = profile["videos"].head(15).copy()
+            display["date"] = pd.to_datetime(display["date"], errors="coerce").dt.strftime("%b %d, %Y")
+            st.dataframe(
+                display[["date", "plays", "likes", "comments", "shares", "description"]],
+                use_container_width=True,
+                hide_index=True,
+            )
+        else:
+            st.info("No video data available for this profile.")
